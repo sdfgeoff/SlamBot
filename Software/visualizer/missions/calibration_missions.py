@@ -28,7 +28,7 @@ class CalibrateGyro(Mission):
 
         if shaking_deviation > 1e-5:
             print("Device still moving. Waiting before calibrating gyro")
-            #return
+            return
 
         calibration_gyro_samples = [s.gyro for s in itertools.islice(self.chassis.samples, len(self.chassis.samples)-(self.CALIBRATION_SAMPLES), len(self.chassis.samples))]
         _calibration_gyro_deviation, calibration_gyro_average = get_deviation_and_average(calibration_gyro_samples)
@@ -40,8 +40,5 @@ class CalibrateGyro(Mission):
         gravity = calibration_accelerometer_average.normalized() * GRAVITY.length
         self.accelerometer_calibration = calibration_accelerometer_average - gravity
 
-        print(calibration_accelerometer_average, self.accelerometer_calibration)
-
-
         self.gyro_calibration = calibration_gyro_average
-        self.is_complete = False
+        self.is_complete = True

@@ -1,7 +1,7 @@
 #ifndef chassis_h
 #define chassis_h
 
-const uint8_t LED = 22;
+
 
 const int PIN_LEFT_1 = 32;
 const int PIN_LEFT_2 = 33;

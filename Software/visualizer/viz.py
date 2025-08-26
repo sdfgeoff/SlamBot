@@ -1,7 +1,7 @@
 from collections import deque
 from typing import NamedTuple
 import bge
-from chassis import ChassisConnection, ChassisSample
+from chassis import ChassisCommand, ChassisConnection, ChassisSample
 from imu import GRAVITY
 from mathutils import Vector, Matrix, Euler, Quaternion
 import math
@@ -26,12 +26,28 @@ class LidarVizualizer:
         self.obj = obj
         self.distance_mm = 0.0
 
+        self.cones = []
+        self.i = 0
+
     def update(self):
         bge.render.drawLine(
             self.obj.worldPosition,
             self.obj.worldPosition + self.obj.getAxisVect([0,0,self.distance_mm/1000]),
             [1,1,0,1]
         )
+
+        self.i += 1
+
+        if len(self.cones) < 100:
+            cone = self.obj.scene.addObject("Cone")
+            self.cones.append(cone)
+        else:
+            cone = self.cones[self.i % len(self.cones)]
+        cone.worldOrientation = self.obj.worldOrientation
+        cone.worldPosition = self.obj.worldPosition
+
+        rise = math.tan(math.radians(25/2)) * self.distance_mm / 1000
+        cone.localScale = [rise, rise, self.distance_mm / 1000]
 
 
 
@@ -63,7 +79,7 @@ def estimate_new_pose_from_imu(previous_pose: Pose, sample: ChassisSample, gyro_
 
     acceleration = ori @ (sample.accelerometer - accelerometer_bias) - GRAVITY
     linear_velocity += acceleration * dt
-    translation += linear_velocity * dt
+    # translation += linear_velocity * dt
 
     return Pose(
         worldTransform=Matrix.LocRotScale(translation, ori, Vector([1,1,1])),
@@ -71,6 +87,35 @@ def estimate_new_pose_from_imu(previous_pose: Pose, sample: ChassisSample, gyro_
     )
 
 
+
+# class LidarEvent(NamedTuple):
+#     time: float
+#     distance_left: float
+#     distance_right: float
+
+# class ImuEvent(NamedTuple):
+#     time: float
+#     accelerometer: Vector
+#     gyro: Vector
+#     dt: float
+
+# class PoseEstimateEvent(NamedTuple):
+#     time: float
+#     world_transform: Matrix
+#     world_linear_velocity: Vector
+#     world_angular_velocity: Vector
+
+
+# class OdometryEvent(NamedTuple):
+#     time: float
+#     linear_velocity: Vector
+#     angular_velocity: Vector
+
+
+# Event = LidarEvent | ImuEvent | PoseEstimateEvent | OdometryEvent
+
+# def get_pose_estimate_at_time(events: Event, time: float):
+#     pass
 
 
 class Simulator:
@@ -83,7 +128,6 @@ class Simulator:
 
         self.gyro_bias = Vector([0,0,0])
         self.accelerometer_bias = Vector([0,0,0])
-
         self.angular_velocity_estimate = Vector([0,0,0])
         self.previous_orientation = self.obj.worldOrientation
         self.linear_velocity_worldspace = Vector([0,0,0])
@@ -91,15 +135,50 @@ class Simulator:
         self.i = 0
 
         self.mission = CalibrateGyro(self.chassis)
+
+        self.chassis.on_sample.append(self.update_pose_estimate_from_sample)
+        self.pose_estimate_history: deque[Matrix] = deque(maxlen=100)
+        self.prev_sample_time = None
+
+
+    def update_pose_estimate_from_sample(self, new_sample: ChassisSample):
+        self.lidar_left.distance_mm = new_sample.distance_left_mm
+        self.lidar_right.distance_mm = new_sample.distance_right_mm
+
+        if self.prev_sample_time is None:
+            self.prev_sample_time = new_sample.time_ms
+            return
+        
+        dt = (new_sample.time_ms - self.prev_sample_time) / 1000
+        self.prev_sample_time = new_sample.time_ms
+
+        previous_pose = Pose(
+            worldTransform=self.obj.worldTransform @ self.imu_transform,
+            worldLinearVelocity=self.linear_velocity_worldspace,
+        )
+        newPose = estimate_new_pose_from_imu(
+            previous_pose=previous_pose,
+            sample=new_sample,
+            gyro_bias=self.gyro_bias,
+            accelerometer_bias=self.accelerometer_bias,
+            dt=dt
+        )
+        
+        self.obj.worldTransform = newPose.worldTransform @ self.imu_transform.inverted()
+        self.linear_velocity_worldspace = newPose.worldLinearVelocity
+
         
 
     def run(self):
         dt = 1 / bge.logic.getAverageFrameRate()
         self.chassis.poll()
+
         
         if not self.chassis.samples:
             print("No Connection")
             return
+
+
 
         if self.mission:
             self.mission.run(dt)
@@ -108,32 +187,14 @@ class Simulator:
                 self.accelerometer_bias = self.mission.accelerometer_calibration
                 self.mission = None
 
-
         else:
-            self.i += 1
-
-            latest_packet = self.chassis.samples[-1]
-            self.lidar_left.distance_mm = latest_packet.distance_left_mm
-            self.lidar_right.distance_mm = latest_packet.distance_right_mm
             self.lidar_left.update()
             self.lidar_right.update()
 
-            previous_pose = Pose(
-                worldTransform=self.obj.worldTransform @ self.imu_transform,
-                worldLinearVelocity=self.linear_velocity_worldspace,
-            )
-            newPose = estimate_new_pose_from_imu(
-                previous_pose=previous_pose,
-                sample=latest_packet,
-                gyro_bias=self.gyro_bias,
-                accelerometer_bias=self.accelerometer_bias,
-                dt=dt
-            )
-            
-            self.obj.worldTransform = newPose.worldTransform @ self.imu_transform.inverted()
-            self.linear_velocity_worldspace = newPose.worldLinearVelocity
-            
-
+            self.chassis.command(ChassisCommand(
+                speed=0,
+                direction=20
+            ))
 
 
 def start():

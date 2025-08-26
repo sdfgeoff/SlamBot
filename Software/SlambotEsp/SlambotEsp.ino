@@ -2,7 +2,9 @@
 #include <Adafruit_MPU6050.h>
 #include "Adafruit_VL53L0X.h" // You may need to install this library
 #include "chassis.h"
-
+#include "webserver.h"
+#include "events.h"
+#include <WiFi.h>
 
 const uint8_t PIN_I2C_SDA = 17;
 const uint8_t PIN_I2C_SCL = 16;
@@ -16,6 +18,8 @@ const uint8_t ADDRESS_DEFAULT_VL53L0X = 0x29;
 const uint8_t ADDRESS_TOF_LEFT = 0x01;
 const uint8_t ADDRESS_TOF_RIGHT = 0x02;
 
+const char *ssid = "NotForAnything";
+const char *password = "TotallyTrue";
 
 
 Adafruit_VL53L0X tof_sensor_left = Adafruit_VL53L0X();
@@ -23,12 +27,31 @@ Adafruit_VL53L0X tof_sensor_right = Adafruit_VL53L0X();
 Adafruit_MPU6050 imu = Adafruit_MPU6050();
 
 void setup() {
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  Wire.setClock(400000);
+
   Serial.begin(115200);
 
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, HIGH);
+  Serial.println("Connecting to Wifi");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  // Wait for connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(400000);
+
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
 
   Serial.println("Init TOF Sensors");
   pinMode(PIN_TOF_LEFT_XSHUT, OUTPUT);
@@ -66,6 +89,9 @@ void setup() {
   initChassis();
   setLeftMotor(0);
   setRightMotor(0);
+
+  Serial.println("Init Webserver");
+  init_webserver();
 
   Serial.println("Boot Complete");
 }
@@ -114,28 +140,44 @@ void loop() {
   gyro_averaged.gyro.y = gyro_averaged.gyro.y / float(averaging_samples);
   gyro_averaged.gyro.z = gyro_averaged.gyro.z / float(averaging_samples);
 
+  latest_accelerometer = acceleration_averaged;
+  latest_gyro = gyro_averaged;
+  latest_lidar_left = left_distance;
+  latest_lidar_right = right_distance;
+  latest_time = millis();
+
   Serial.print("{");
   Serial.print("\"t\":");
   Serial.print(millis());
   Serial.print(",\"rx\":");
-  Serial.print(gyro_event.gyro.x, 6);
+  Serial.print(gyro_averaged.gyro.x, 6);
   Serial.print(",\"ry\":");
-  Serial.print(gyro_event.gyro.y, 6);
+  Serial.print(gyro_averaged.gyro.y, 6);
   Serial.print(",\"rz\":");
-  Serial.print(gyro_event.gyro.z, 6);
+  Serial.print(gyro_averaged.gyro.z, 6);
   Serial.print(",\"ax\":");
-  Serial.print(acceleration_event.gyro.x, 6);
+  Serial.print(acceleration_averaged.acceleration.x, 6);
   Serial.print(",\"ay\":");
-  Serial.print(acceleration_event.gyro.y, 6);
+  Serial.print(acceleration_averaged.acceleration.y, 6);
   Serial.print(",\"az\":");
-  Serial.print(acceleration_event.gyro.z, 6);
+  Serial.print(acceleration_averaged.acceleration.z, 6);
   Serial.print(",\"dl\":");
   Serial.print(left_distance);
   Serial.print(",\"dr\":");
   Serial.print(right_distance);
   Serial.println("}");
+
+  poll_webserver();
+
+  if (millis() - latest_control_time < 1000) {
+    setLeftMotor(latest_control_speed - latest_control_direction);
+    setRightMotor(latest_control_speed + latest_control_direction);
+  } else {
+    setLeftMotor(0);
+    setRightMotor(0);
+  }
+
+  delay(1);
   
-  //setLeftMotor(-30);
-  //setRightMotor(-30);
 
 }
